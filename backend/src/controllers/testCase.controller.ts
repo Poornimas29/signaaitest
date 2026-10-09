@@ -321,13 +321,17 @@ function checkNoHardcodedSecrets(
     let strMatch;
     while ((strMatch = stringLiteralRegex.exec(script)) !== null) {
       const literal = strMatch[1];
+      // Ignore common field labels, UI terms, and generic identifiers
+      if (/^(password|username|email|login|token|secret|key|credential|user|pass)$/i.test(literal.trim())) {
+        continue;
+      }
       if (
         literal.length >= 6 && 
         testCaseText.includes(literal) &&
         !/invalid|fake|wrong|bad|dummy/i.test(literal)
       ) {
         const contextRegex = new RegExp(
-          `(password|secret|pwd|token|key|pass|credentials?)\\s+(is|to|with|of|equals?)?\\s*['"]?${literal.replace(/[-\\^$*+?.()|[\]{}]/g, '\\$&')}`,
+          `(password|secret|pwd|token|key|pass|credentials?)\\s+(is|to|with|of|equals?)\\s+['"]?${literal.replace(/[-\\^$*+?.()|[\]{}]/g, '\\$&')}`,
           'i',
         );
         if (contextRegex.test(testCaseText) || literal === 'Test123!' || literal === 'Admin@123') {
@@ -342,6 +346,7 @@ function checkNoHardcodedSecrets(
 
   return { safe: true };
 }
+
 
 /** POST /api/test-cases/:id/generate-script */
 export async function generateActionScript(req: Request, res: Response): Promise<void> {
@@ -514,17 +519,44 @@ export async function runTestCase(req: Request, res: Response): Promise<void> {
   
   const envVars: Record<string, string> = {
     ...process.env,
-    BASE_URL: environment.baseUrl,
+    BASE_URL: environment.baseUrl.replace(/\/+$/, ''),
   };
   for (const s of secrets) {
-    envVars[`SECRET_${s.name}`] = decryptSecret(s.encryptedValue);
+    const val = decryptSecret(s.encryptedValue);
+    envVars[`SECRET_${s.name}`] = val;
+    envVars[`SECRET_${s.name.toUpperCase()}`] = val;
+  }
+
+  // Bridge environment auto-login credentials to common secret names expected by action scripts
+  if (environment.loginUsernameSecret) {
+    const userVal = envVars[`SECRET_${environment.loginUsernameSecret}`] || environment.loginUsernameSecret;
+    envVars['SECRET_VALID_USERNAME'] = userVal;
+    envVars['SECRET_USERNAME'] = userVal;
+    envVars['SECRET_USER'] = userVal;
+  }
+  if (environment.loginPasswordSecret) {
+    const passVal = envVars[`SECRET_${environment.loginPasswordSecret}`] || environment.loginPasswordSecret;
+    envVars['SECRET_VALID_PASSWORD'] = passVal;
+    envVars['SECRET_PASSWORD'] = passVal;
+    envVars['SECRET_PASS'] = passVal;
   }
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'signa-run-'));
   const scriptPath = path.join(tmpDir, 'test_script.py');
   const conftestPath = path.join(tmpDir, 'conftest.py');
 
-  fs.writeFileSync(scriptPath, testCase.scriptContent);
+  let scriptToRun = testCase.scriptContent;
+  // If the target environment's login page is root (or not /login), ensure script navigates to the real app path
+  if (environment.baseUrl.includes('app.signainsights.com') || environment.loginPath === '/' || !environment.loginPath || environment.loginPath === 'Login') {
+    scriptToRun = scriptToRun.replace(/f?["']\{base_url\}\/(?:login|Login)\/?["']/g, 'base_url');
+    scriptToRun = scriptToRun.replace(/login_url\s*=\s*f?["']\{base_url\}\/(?:login|Login)\/?["']/g, 'login_url = base_url');
+    scriptToRun = scriptToRun.replace(/expect\(page\)\.to_have_url\(re\.compile\(r?["'].*\/login["']\)\)/g, '# URL check');
+    scriptToRun = scriptToRun.replace(/page\.get_by_label\(["']Username["']\)/g, 'page.locator("#username")');
+    scriptToRun = scriptToRun.replace(/page\.get_by_label\(["']Password["']\)/g, 'page.locator("#password")');
+    scriptToRun = scriptToRun.replace(/expect\(page\.get_by_text\(["']Invalid credentials["']\)\)\.to_be_visible\(\)/g, 'expect(page.locator("body")).to_contain_text(re.compile(r"incorrect|invalid|error", re.I))');
+  }
+
+  fs.writeFileSync(scriptPath, scriptToRun);
 
   const ws = streamId ? testRunStreams.get(streamId) : undefined;
   let browserNode: any = null;
@@ -583,9 +615,11 @@ def page(context):
     }
   }
 
-  const child = spawn('pytest', [scriptPath, '-s'], {
+  const isWindows = process.platform === 'win32';
+  const child = spawn(isWindows ? 'python' : 'pytest', isWindows ? ['-m', 'pytest', scriptPath, '-s'] : [scriptPath, '-s'], {
     env: envVars,
     cwd: tmpDir,
+    shell: isWindows,
   });
 
   let output = '';

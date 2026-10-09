@@ -68,8 +68,7 @@ export class GeminiProvider implements AIProvider {
   // to ensure we always have access to Google's current recommended fast model without
   // hardcoding a version that will eventually be deprecated.
   // If stability/reproducibility becomes more important than having the newest model,
-  // this can be pinned to a specific dated version instead (check https://ai.google.dev/gemini-api/docs/models).
-  private modelName = 'gemini-flash-latest';
+  private modelName = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
   constructor() {
     const apiKey = process.env.GEMINI_API_KEY;

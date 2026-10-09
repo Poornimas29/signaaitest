@@ -110,7 +110,7 @@ Output only the Python code. Do not wrap the output in markdown code blocks. Sta
       },
       body: JSON.stringify({
         messages: [{ role: 'user', content: prompt }],
-        model: 'llama-3.3-70b-versatile',
+        model: process.env.GROQ_MODEL || 'openai/gpt-oss-120b',
       }),
     });
 

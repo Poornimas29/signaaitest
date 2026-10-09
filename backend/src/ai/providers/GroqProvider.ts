@@ -21,8 +21,7 @@ const generatedTestCasesSchema = z.array(testCaseSchema);
 const wrappedSchema = z.object({ testCases: generatedTestCasesSchema });
 
 export class GroqProvider implements AIProvider {
-  // Using a solid, fast, currently supported Groq model. Update here if their lineup changes.
-  private modelName = 'llama-3.3-70b-versatile';
+  private modelName = process.env.GROQ_MODEL || 'openai/gpt-oss-120b';
   private apiKey: string;
 
   constructor() {
